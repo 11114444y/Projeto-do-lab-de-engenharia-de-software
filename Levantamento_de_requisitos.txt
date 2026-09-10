@@ -1,0 +1,31 @@
+Levantamento de requisitos 
+
+1. Os visitantes podem usar o simulador apenas para vivenciar o dia a dia de um trabalhador brasileiro. 
+
+2. Os visitantes podem alterar o valor do salário base do simulador. 
+
+3. Os visitantes podem optar por se cadastrar como usuário 
+
+4. Qualquer usuário pode usar o simulador. 
+
+5. Os usuários podem visualizar seu histórico de uso do simulador. 
+
+6. O usuário pode ser empregador ou trabalhador. 
+
+7.1. O cadastro como empregador exige o fornecimento de informações básicas da empresa e certificados de qualificação para garantir a autenticidade do recrutamento. 
+
+7.2. Os empregadores podem adicionar e gerenciar vagas de emprego no banco de dados de vagas. 
+
+7.3. Os empregadores podem definir salários, benefícios, prazos de inscrição e processos de seleção. 
+
+7.4. Os empregadores podem gerenciar as vagas de emprego cadastradas, como alterar salários, estender prazos de inscrição ou excluir vagas. 
+
+8.1. O cadastro como trabalhador exige o preenchimento de um perfil pessoal/currículo. 
+
+8.2. Os trabalhadores podem acessar o banco de dados de vagas para visualizar vagas que correspondam ao seu perfil. 
+
+8.3. Os trabalhadores podem acessar a central de ajuda para obter informações sobre benefícios que correspondam ao seu perfil e informações sobre ONGs que podem fornecer assistência. 
+
+8.4. Os trabalhadores podem acessar o processo de recrutamento. 
+
+8.5. Os trabalhadores podem gerenciar o processo de candidatura, incluindo a retirada de candidaturas ou o acompanhamento do andamento das mesmas. 
