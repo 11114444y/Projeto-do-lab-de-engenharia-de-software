@@ -1,0 +1,139 @@
+@startuml
+title Diagrama de Classes de Domínio
+
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+
+' =========================
+' USUÁRIOS
+' =========================
+
+abstract class Usuario {
+    id : Long
+    nome : String
+    email : String
+    senha : String
+}
+
+class Administrador
+
+class Empregador {
+    nomeEmpresa : String
+}
+
+class Trabalhador {
+    telefone : String
+    cpf : Long
+    cidade : String
+    estado : String
+}
+
+Usuario <|-- Administrador
+Usuario <|-- Empregador
+Usuario <|-- Trabalhador
+
+' =========================
+' VAGAS E CANDIDATURAS
+' =========================
+
+class Vaga {
+    id : Long
+    titulo : String
+    descricao : String
+    remuneracao : Decimal
+    dataPublicacao : Date
+    status : String
+}
+
+class Candidatura {
+    id : Long
+    dataCandidatura : Date
+    status : String
+}
+
+Empregador "1" -- "0..*" Vaga : publica >
+Trabalhador "1" -- "0..*" Candidatura : realiza >
+Vaga "1" -- "0..*" Candidatura : recebe >
+
+' =========================
+' SIMULAÇÃO
+' =========================
+
+class Simulacao {
+    id : Long
+    rendaMensal : Decimal
+    saldoFinal : Decimal
+    dataSimulacao : Date
+}
+
+class Despesa {
+    id : Long
+    descricao : String
+    valor : Decimal
+    categoria : String
+}
+
+Usuario "0..1" -- "0..*" Simulacao : realiza >
+Simulacao "1" *-- "1..*" Despesa : possui >
+
+' =========================
+' PROGRAMAS SOCIAIS
+' =========================
+
+class ProgramaSocial {
+    id : Long
+    nome : String
+    descricao : String
+    requisitos : String
+}
+
+ProgramaSocial "0..*" -- "1" Localizacao : disponível em >
+ProgramaSocial "0..*" -- "1..*" FonteDados : utiliza >
+
+' =========================
+' LOCALIZAÇÃO
+' =========================
+
+class Localizacao {
+    cidade : String
+    estado : String
+    pais : String
+}
+
+Vaga "0..*" -- "1" Localizacao : localizada em >
+
+' =========================
+' NOTIFICAÇÕES
+' =========================
+
+class Notificacao {
+    id : Long
+    titulo : String
+    mensagem : String
+    dataEnvio : Date
+    lida : Boolean
+}
+
+Usuario "1" -- "0..*" Notificacao : recebe >
+
+' =========================
+' FONTES DE DADOS
+' =========================
+
+class FonteDados {
+    id : Long
+    nome : String
+    referencia : String
+    descricao : String
+}
+
+Simulacao "0..*" -- "1..*" FonteDados : utiliza >
+
+' =========================
+' ADMINISTRAÇÃO
+' =========================
+
+Administrador ..> Usuario : gerencia
+Administrador ..> Vaga : gerencia
+
+@enduml

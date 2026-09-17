@@ -1,0 +1,49 @@
+@startuml
+title Diagrama de Sequência - UC06 Adicionar Vaga
+
+actor Empregador
+boundary "Tela de Cadastro de Vaga" as Tela
+control "Controle de Vagas" as Controle
+control "Controle de Autenticação" as Auth
+database "Banco de Dados" as BD
+
+Empregador -> Tela : Solicitar adição de vaga
+
+Tela -> Auth : Verificar autenticação
+
+alt Empregador não autenticado
+    Auth --> Tela : Não autenticado
+    Tela -> Empregador : Solicitar login
+    Empregador -> Tela : Informar credenciais
+    Tela -> Auth : Validar credenciais
+    Auth -> BD : Consultar usuário
+    BD --> Auth : Dados do usuário
+
+    alt Credenciais válidas
+        Auth --> Tela : Autenticação realizada
+    else Credenciais inválidas
+        Auth --> Tela : Falha na autenticação
+        Tela -> Empregador : Exibir mensagem de erro
+        
+    end
+else Empregador já autenticado
+    Auth --> Tela : Usuário autenticado
+end
+
+Tela -> Empregador : Exibir formulário de vaga
+Empregador -> Tela : Informar dados da vaga
+Tela -> Controle : Enviar dados da vaga
+
+Controle -> Controle : Validar dados
+
+alt Dados válidos
+    Controle -> BD : Salvar vaga
+    BD --> Controle : Vaga cadastrada
+    Controle --> Tela : Cadastro realizado
+    Tela -> Empregador : Exibir confirmação
+else Dados inválidos
+    Controle --> Tela : Informar erros
+    Tela -> Empregador : Solicitar correção dos dados
+end
+
+@enduml
