@@ -1,0 +1,14 @@
+{
+  "name": "Projeto Engenharia",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:20",
+  "forwardPorts": [5173],
+  "portsAttributes": {
+    "5173": { "label": "Frontend" }
+  },
+  "postCreateCommand": "cd frontend && npm install",
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode"]
+    }
+  }
+}
