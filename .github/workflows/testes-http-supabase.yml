@@ -1,0 +1,26 @@
+name: Testes HTTP do Backend Supabase
+
+on:
+  workflow_dispatch:
+
+jobs:
+  endpoints-http:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verificar URL configurada
+        env:
+          SUPABASE_FUNCTION_URL: ${{ secrets.SUPABASE_FUNCTION_URL }}
+        run: |
+          if [ -z "$SUPABASE_FUNCTION_URL" ]; then
+            echo 'Configure o secret SUPABASE_FUNCTION_URL em Settings > Secrets and variables > Actions.'
+            exit 1
+          fi
+      - name: Testar endpoints reais via HTTP
+        env:
+          SUPABASE_FUNCTION_URL: ${{ secrets.SUPABASE_FUNCTION_URL }}
+        run: node --test tests/endpoints-http.test.mjs

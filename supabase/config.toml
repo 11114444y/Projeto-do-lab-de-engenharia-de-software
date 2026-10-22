@@ -1,0 +1,5 @@
+# O backend valida manualmente cada JWT com auth.getUser(). Desabilitar a validação
+# no gateway permite chamadas públicas de /health, /bootstrap e /signup; rotas privadas
+# continuam protegidas pela validação de sessão e pelas checagens de perfil na função.
+[functions.make-server-813cc0a8]
+verify_jwt = false
