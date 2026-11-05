@@ -18,11 +18,11 @@ test('Tabelas necessárias e RLS existem na migração', () => {
   }
   assert.match(sql, /unique\(user_id, job_id\)/);
 });
-test('Rotas de escrita privadas exigem autenticação', () => {
+test('Rotas de escrita privadas exigem autenticação e papel', () => {
   for (const route of ['/applications','/jobs','/simulations','/profile']) {
     const idx = backend.indexOf(`"${route}"`);
     assert.ok(idx >= 0);
-    assert.match(backend.slice(idx, idx+250), /requireUser\(c\)/);
+    assert.match(backend.slice(idx, idx+250), /member\(c/);
   }
 });
 test('Credenciais privadas não estão no frontend e configuração está documentada', () => {

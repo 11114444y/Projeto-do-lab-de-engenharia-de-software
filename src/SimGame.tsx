@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { calculateSalary } from "./lib/salary";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface CityData {
@@ -100,13 +101,7 @@ const clamp  = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const fmt    = (n: number) => n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
-export function calcSalaryNet(gross: number) {
-  let inss = gross <= 1412 ? gross * 0.075 : gross <= 2666.68 ? gross * 0.09 : gross <= 4000.03 ? gross * 0.12 : gross <= 7786.02 ? gross * 0.14 : 7786.02 * 0.14;
-  const base = gross - inss;
-  let irrf = base > 4664.68 ? base * 0.275 - 896 : base > 3751.05 ? base * 0.225 - 662.77 : base > 2826.65 ? base * 0.15 - 394.16 : base > 2259.2 ? base * 0.075 - 169.44 : 0;
-  if (irrf < 0) irrf = 0;
-  return round2(gross - inss - irrf);
-}
+export function calcSalaryNet(gross: number) { return calculateSalary(gross).net; }
 
 function makeBills(city: CityData, startWeek: number): Bill[] {
   return [
@@ -135,8 +130,8 @@ function initGame(config: GameConfig): GameState {
       { id: 1, week: config.startWeek, text: `Transporte ao trabalho (sem. 1, 5 dias): −${fmt(workTransport)}`, type: "expense", amount: workTransport },
     ],
     phase: "playing",
-    totalSpent: workTransport + city.rent,
-    spentByCategory: { "Transporte": workTransport, "Moradia": city.rent },
+    totalSpent: workTransport,
+    spentByCategory: { "Transporte": workTransport },
     tracker: freshTracker(),
     location: "casa",
     logId: 3,
@@ -268,11 +263,11 @@ const statColor = (v: number) => v > 60 ? "#22c55e" : v > 30 ? "#f97316" : "#ef4
 export function SimIntroView({ onStart }: { onStart: (c: GameConfig) => void }) {
   const [step, setStep] = useState<"intro" | "setup">("intro");
   const [city, setCity]         = useState("São Paulo");
-  const [salaryInput, setSalaryInput] = useState("1412");
+  const [salaryInput, setSalaryInput] = useState("1621");
   const [month, setMonth]       = useState(8);
   const [startWeek, setStartWeek] = useState(1);
 
-  const gross    = parseFloat(salaryInput) || 1412;
+  const gross    = parseFloat(salaryInput) || 1621;
   const net      = calcSalaryNet(gross);
   const cityData = CITIES[city];
   const estMonthly = cityData.rent + cityData.transport * 2 * 22 + cityData.groceriesCheap * 4 + cityData.waterBill + cityData.electricity + cityData.internet;
@@ -343,13 +338,13 @@ export function SimIntroView({ onStart }: { onStart: (c: GameConfig) => void }) 
               <div className="flex border border-white/30 focus-within:border-yellow-400">
                 <span className="px-3 h-11 flex items-center text-green-200 text-sm border-r border-white/30">R$</span>
                 <input type="number" value={salaryInput} onChange={e => setSalaryInput(e.target.value)}
-                  className="flex-1 bg-transparent text-white px-3 h-11 text-sm outline-none" min={1412} step={100} />
+                  className="flex-1 bg-transparent text-white px-3 h-11 text-sm outline-none" min={1621} step={100} />
               </div>
               <div className="flex justify-between mt-1.5 text-xs text-green-300">
-                <span>Mínimo: R$ 1.412</span>
+                <span>Mínimo: R$ 1.621 (2026)</span>
                 <span>Líquido: <strong className="text-white">{fmt(net)}</strong></span>
               </div>
-              <input type="range" min={1412} max={10000} step={100} value={gross}
+              <input type="range" min={1621} max={10000} step={100} value={gross}
                 onChange={e => setSalaryInput(e.target.value)} className="w-full mt-2 h-1" style={{ accentColor: "#f0a500" }} />
             </div>
 
@@ -412,9 +407,18 @@ interface PathSegment { x1: number; y1: number; x2: number; y2: number }
 interface AvatarState  { x: number; y: number; moving: boolean; segments: PathSegment[] }
 
 // ─── SimGameView ──────────────────────────────────────────────────────────────
-export function SimGameView({ config, onQuit }: { config: GameConfig; onQuit: () => void }) {
+export function SimGameView({ config, onQuit, onComplete }: { config: GameConfig; onQuit: () => void; onComplete?: (data:{kind:"life";salary:number;netSalary:number;inss:number;irrf:number;fgts:number;city:string;totalExpenses:number;finalBalance:number;expenses:{description:string;category:string;amount:number}[];date:string})=>void }) {
   const city = CITIES[config.city];
   const [gs, setGs]   = useState<GameState>(() => initGame(config));
+  const saved = useRef(false);
+  useEffect(()=>{
+    if(gs.phase === "playing" || saved.current || !onComplete)return;
+    saved.current=true;
+    const salary=calculateSalary(config.grossSalary);
+    onComplete({kind:"life",salary:config.grossSalary,netSalary:config.netSalary,inss:salary.inss,irrf:salary.irrf,fgts:salary.fgts,city:config.city,
+      totalExpenses:gs.totalSpent,finalBalance:gs.balance,date:new Date().toISOString(),
+      expenses:Object.entries(gs.spentByCategory).filter(([,amount])=>amount>0).map(([category,amount])=>({description:`Despesas de ${category.toLowerCase()}`,category,amount}))});
+  },[gs.phase,gs.balance,gs.totalSpent,gs.spentByCategory,onComplete,config]);
   const [showSummary, setShowSummary] = useState(false);
   const [summaryDeltas, setSummaryDeltas] = useState<{ h: number; health: number; e: number } | null>(null);
 
@@ -754,7 +758,7 @@ export function SimGameView({ config, onQuit }: { config: GameConfig; onQuit: ()
   const currentLocDef = LOCATION_DEFS.find(l => l.id === gs.location)!;
   const unpaidDue = gs.bills.filter(b => !b.paid && b.dueWeek <= gs.week);
 
-  if (gs.phase === "lost") return <SimGameOverView gs={gs} config={config} onRestart={() => { setGs(initGame(config)); setAvatar(null); }} onQuit={onQuit} />;
+  if (gs.phase === "lost") return <SimGameOverView gs={gs} config={config} onRestart={() => { saved.current=false;setGs(initGame(config)); setAvatar(null); }} onQuit={onQuit} />;
   if (gs.phase === "won")  return <SimSummaryView gs={gs} config={config} onQuit={onQuit} />;
 
   return (
