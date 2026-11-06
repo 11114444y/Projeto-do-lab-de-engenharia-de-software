@@ -1,7 +1,9 @@
 import { useState, useCallback, useEffect } from "react";
 import { SimIntroView, SimGameView, type GameConfig } from "./SimGame";
 import { api } from "./lib/api";
+import { calculateSalary, SALARY_TABLE_YEAR } from "./lib/salary";
 import { supabase } from "./lib/supabase";
+import { EmployerApplicantPanel, EmployerVerification, AdminPanel, NotificationsPanel } from "./Operations";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type View =
@@ -21,9 +23,12 @@ type View =
   | "simulator-history"
   | "profile"
   | "sim-intro"
-  | "sim-game";
+  | "sim-game"
+  | "notifications"
+  | "admin"
+  | "employer-applicants";
 
-type UserRole = "worker" | "employer" | null;
+type UserRole = "worker" | "employer" | "admin" | null;
 
 interface User {
   id: string;
@@ -31,6 +36,11 @@ interface User {
   email: string;
   role: UserRole;
   company?: string;
+  cpf?: string; cnpj?: string; phone?: string; city?: string; state?: string;
+  education?: string; area?: string; skills?: string; experience?: string; resume?: string;
+  sector?: string; company_size?: string;
+  verification_status?: "not_required" | "pending" | "approved" | "rejected";
+  verification_notes?: string;
 }
 
 interface NewAccount {
@@ -39,8 +49,15 @@ interface NewAccount {
   password: string;
   role: Exclude<UserRole, null>;
   company?: string;
+  cpf?: string; cnpj?: string; phone?: string; city?: string; state?: string;
+  education?: string; area?: string; skills?: string; experience?: string; resume?: string;
+  sector?: string; size?: string; cert1?: boolean; cert2?: boolean; cert3?: boolean;
 }
 
+interface Expense { description: string; category: string; amount: number }
+interface SocialProgram { id:number; name:string; kind:"benefit"|"service"; desc:string; req:string; coverage:string; scope:string; city:string; state:string; verifiedAt:string; sources:{name:string;reference_url:string;checked_at:string}[] }
+interface Notification { id:string; title:string; message:string; read:boolean; created_at:string }
+interface Stats { workers:number; employers:number; activeJobs:number }
 interface SimHistory {
   date: string;
   salary: number;
@@ -48,6 +65,8 @@ interface SimHistory {
   inss: number;
   irrf: number;
   fgts: number;
+  id?: string; kind?: "salary" | "life"; city?: string;
+  totalExpenses?: number; finalBalance?: number; expenses?: Expense[];
 }
 
 interface Job {
@@ -64,9 +83,11 @@ interface Job {
   requirements: string[];
   process: string;
   employerId: string;
+  status?: "active" | "closed" | "archived"; publishedAt?: string; city?: string; state?: string;
 }
 
 interface Application {
+  id?: string; workerId?: string; workerName?: string;
   jobId: number;
   jobTitle: string;
   company: string;
@@ -74,116 +95,8 @@ interface Application {
   status: "Em análise" | "Entrevista" | "Reprovado" | "Aprovado";
 }
 
-// ─── Salary Calculation ───────────────────────────────────────────────────────
-function calcSalary(gross: number) {
-  // INSS 2024 rates
-  let inss = 0;
-  if (gross <= 1412.0) inss = gross * 0.075;
-  else if (gross <= 2666.68) inss = gross * 0.09;
-  else if (gross <= 4000.03) inss = gross * 0.12;
-  else if (gross <= 7786.02) inss = gross * 0.14;
-  else inss = 7786.02 * 0.14;
-
-  const base = gross - inss;
-  // IRRF simplified
-  let irrf = 0;
-  if (base > 4664.68) irrf = base * 0.275 - 896.0;
-  else if (base > 3751.05) irrf = base * 0.225 - 662.77;
-  else if (base > 2826.65) irrf = base * 0.15 - 394.16;
-  else if (base > 2259.2) irrf = base * 0.075 - 169.44;
-  else irrf = 0;
-  if (irrf < 0) irrf = 0;
-
-  const fgts = gross * 0.08;
-  const net = gross - inss - irrf;
-
-  return { inss, irrf, fgts, net, base };
-}
-
-// ─── Mock Data ────────────────────────────────────────────────────────────────
-const INITIAL_JOBS: Job[] = [
-  {
-    id: 1,
-    title: "Auxiliar de Logística",
-    company: "TransBrasil Logística",
-    location: "São Paulo, SP",
-    salary: 2200,
-    type: "CLT",
-    area: "Logística",
-    deadline: "2026-10-15",
-    benefits: ["Vale-transporte", "Vale-refeição R$32/dia", "Plano de saúde", "FGTS"],
-    description:
-      "Responsável por auxiliar nas operações de recebimento, armazenagem e expedição de mercadorias. Organização de estoque e controle de inventário.",
-    requirements: ["Ensino médio completo", "Disponibilidade para turnos", "Experiência prévia em estoque (desejável)"],
-    process: "Triagem de currículos → Entrevista presencial → Exame admissional",
-    employerId: "transbrasil",
-  },
-  {
-    id: 2,
-    title: "Operador de Caixa",
-    company: "Mercado Esperança",
-    location: "Belo Horizonte, MG",
-    salary: 1850,
-    type: "CLT",
-    area: "Comércio",
-    deadline: "2026-09-30",
-    benefits: ["Vale-transporte", "Vale-alimentação R$450/mês", "14º salário"],
-    description: "Atendimento ao cliente no caixa, controle de pagamentos em dinheiro, cartão e PIX, emissão de notas fiscais.",
-    requirements: ["Ensino médio completo", "Boa comunicação", "Experiência em atendimento ao cliente"],
-    process: "Análise de currículo → Dinâmica de grupo → Entrevista com gestor",
-    employerId: "mercado",
-  },
-  {
-    id: 3,
-    title: "Técnico em Manutenção Elétrica",
-    company: "Indústria Novo Horizonte",
-    location: "Campinas, SP",
-    salary: 4500,
-    type: "CLT",
-    area: "Manutenção",
-    deadline: "2026-10-31",
-    benefits: ["Vale-transporte", "Vale-refeição no local", "Plano de saúde e odontológico", "PLR anual"],
-    description: "Manutenção preventiva e corretiva de equipamentos elétricos industriais. Diagnóstico de falhas e suporte à produção.",
-    requirements: ["Técnico em Eletrotécnica", "NR-10 e NR-35", "Experiência mínima de 2 anos em indústria"],
-    process: "Análise de currículo → Teste técnico online → Entrevista presencial",
-    employerId: "industria",
-  },
-  {
-    id: 4,
-    title: "Cuidador de Idosos",
-    company: "Lar Sereno Assistência",
-    location: "Rio de Janeiro, RJ",
-    salary: 2100,
-    type: "CLT",
-    area: "Saúde",
-    deadline: "2026-09-28",
-    benefits: ["Vale-transporte", "Alimentação fornecida", "Uniforme", "Treinamento contínuo"],
-    description: "Assistência a idosos em atividades do cotidiano, acompanhamento em consultas, administração de medicamentos.",
-    requirements: ["Curso de Cuidador de Idosos (SENAC ou similar)", "Paciência e empatia", "Disponibilidade para plantões"],
-    process: "Entrevista inicial → Verificação de antecedentes → Período de experiência 30 dias",
-    employerId: "larsereno",
-  },
-  {
-    id: 5,
-    title: "Desenvolvedor Front-end Júnior",
-    company: "FinTech Caixa Digital",
-    location: "Remoto (Brasil)",
-    salary: 5500,
-    type: "PJ/CLT",
-    area: "Tecnologia",
-    deadline: "2026-10-20",
-    benefits: ["Home office", "Plano de saúde", "Auxílio equipamento R$2.000", "Day off no aniversário"],
-    description: "Desenvolvimento de interfaces para plataforma de pagamentos. Trabalho com React, TypeScript e APIs REST.",
-    requirements: ["React e JavaScript", "HTML/CSS avançado", "Portfólio com projetos publicados"],
-    process: "Análise de portfólio → Desafio técnico (72h) → Entrevista técnica → Entrevista cultural",
-    employerId: "fintechcd",
-  },
-];
-
-const INITIAL_SIM_HISTORY: SimHistory[] = [
-  { date: "2026-09-05 14:32", salary: 3000, netSalary: 2621.4, inss: 300, irrf: 78.6, fgts: 240 },
-  { date: "2026-08-22 09:15", salary: 1412, netSalary: 1305.1, inss: 105.9, irrf: 0, fgts: 112.96 },
-];
+// Cálculo fiscal baseado nas fontes oficiais de INSS e Receita Federal (2026).
+const calcSalary = calculateSalary;
 
 // ─── Components ───────────────────────────────────────────────────────────────
 
@@ -383,7 +296,7 @@ function SalarySimulator({
       )}
       {!compact && (
         <p className="text-muted-foreground text-sm mb-6">
-          Calcule descontos e líquido com base na legislação brasileira vigente (2024).
+          Estimativa de descontos de CLT com tabelas oficiais de {SALARY_TABLE_YEAR}. Não inclui dependentes ou outras deduções.
         </p>
       )}
 
@@ -403,7 +316,7 @@ function SalarySimulator({
         </div>
         <input
           type="range"
-          min={1412}
+          min={1621}
           max={30000}
           step={100}
           value={salary}
@@ -411,7 +324,7 @@ function SalarySimulator({
           className="w-full mt-3 accent-primary h-1"
         />
         <div className="flex justify-between text-xs text-muted-foreground mt-1" style={{ fontFamily: "DM Mono, monospace" }}>
-          <span>R$ 1.412</span>
+          <span>R$ 1.621 (2026)</span>
           <span>R$ 30.000</span>
         </div>
       </div>
@@ -468,11 +381,13 @@ function HomeView({
   onNavigate,
   simHistory,
   onSaveHistory,
+  stats,
 }: {
   user: User | null;
   onNavigate: (v: View) => void;
   simHistory: SimHistory[];
   onSaveHistory: (h: SimHistory) => void;
+  stats: Stats;
 }) {
   return (
     <div>
@@ -540,10 +455,9 @@ function HomeView({
           {/* Stats */}
           <div className="grid grid-cols-2 gap-4">
             {[
-              { label: "Trabalhadores cadastrados", value: "48.230", icon: "👷" },
-              { label: "Vagas ativas", value: "3.941", icon: "💼" },
-              { label: "Empresas parceiras", value: "1.205", icon: "🏭" },
-              { label: "Contratações em 2026", value: "9.870", icon: "🤝" },
+              { label: "Trabalhadores cadastrados", value: stats.workers.toLocaleString("pt-BR"), icon: "👷" },
+              { label: "Vagas ativas", value: stats.activeJobs.toLocaleString("pt-BR"), icon: "💼" },
+              { label: "Empresas verificadas", value: stats.employers.toLocaleString("pt-BR"), icon: "🏭" },
             ].map((s) => (
               <div key={s.label} className="bg-white/10 backdrop-blur-sm p-4 border border-white/20">
                 <div className="text-2xl mb-1">{s.icon}</div>
@@ -574,7 +488,7 @@ function HomeView({
           </p>
           <div className="space-y-3 mb-6">
             {[
-              "Escolha sua cidade — custos reais de SP, RJ, Fortaleza e mais",
+              "Escolha sua cidade — custos ilustrativos para fins didáticos",
               "8 locais visitáveis: mercado, banco, ponto de ônibus, lanchonete...",
               "Indicadores de fome, sede e contas a pagar",
               "Resumo educacional ao fim da simulação",
@@ -593,7 +507,7 @@ function HomeView({
             🎮 Iniciar simulação de vida →
           </button>
           <p className="text-xs text-muted-foreground border-l-2 border-accent pl-3">
-            Gratuito, sem necessidade de cadastro. Dados reais de custo de vida em cidades brasileiras.
+            Gratuito, sem necessidade de cadastro. Custos de vida ilustrativos, não indicadores oficiais de preços.
           </p>
         </div>
         <SalarySimulator onSave={user ? onSaveHistory : undefined} />
@@ -627,7 +541,7 @@ function HomeView({
               {
                 icon: "📊",
                 title: "Gestão de Candidaturas",
-                desc: "Acompanhe o andamento das suas candidaturas em tempo real e retire candidaturas quando necessário.",
+                desc: "Acompanhe o andamento das suas candidaturas na plataforma e retire candidaturas quando necessário.",
                 action: user?.role === "worker" ? () => onNavigate("applications") : () => onNavigate("register"),
                 label: "Minhas candidaturas",
               },
@@ -817,6 +731,7 @@ function RegisterWorkerView({ onRegister }: { onRegister: (account: NewAccount) 
     area: "",
     skills: "",
     experience: "",
+    resume: "",
   });
 
   const update = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
@@ -969,6 +884,10 @@ function RegisterWorkerView({ onRegister }: { onRegister: (account: NewAccount) 
                     className="w-full border border-border bg-background px-3 py-2 text-sm outline-none focus:border-ring resize-none"
                   />
                 </div>
+                <div>
+                  <label htmlFor="worker-resume" className="block text-xs font-medium text-muted-foreground mb-1">CURRÍCULO / APRESENTAÇÃO PROFISSIONAL</label>
+                  <textarea id="worker-resume" value={form.resume} onChange={e=>update("resume",e.target.value)} placeholder="Resumo profissional, qualificações, cursos e objetivos" rows={3} className="w-full border border-border bg-background px-3 py-2 text-sm" />
+                </div>
               </div>
               <div className="flex gap-3 mt-6">
                 <button
@@ -978,12 +897,7 @@ function RegisterWorkerView({ onRegister }: { onRegister: (account: NewAccount) 
                   ← Voltar
                 </button>
                 <button
-                  onClick={() => onRegister({
-                    name: form.name || "Trabalhador",
-                    email: form.email,
-                    password: form.password,
-                    role: "worker",
-                  })}
+                  onClick={() => onRegister({ ...form, role: "worker" })}
                   className="flex-1 bg-primary text-primary-foreground py-2.5 text-sm font-medium hover:opacity-90 transition-opacity"
                 >
                   Criar conta
@@ -1065,6 +979,11 @@ function RegisterEmployerView({ onRegister }: { onRegister: (account: NewAccount
                     />
                   </div>
                 ))}
+                <div className="grid grid-cols-2 gap-3">
+                  {[{label:"TELEFONE COMERCIAL",k:"phone",placeholder:"(11) 3333-4444"},{label:"CIDADE",k:"city",placeholder:"São Paulo"},{label:"ESTADO (UF)",k:"state",placeholder:"SP"}].map(f=><label key={f.k} className="text-xs text-muted-foreground">{f.label}
+                    <input value={(form as any)[f.k]} onChange={e=>update(f.k,e.target.value)} placeholder={f.placeholder} maxLength={f.k==="state"?2:100} className="mt-1 w-full border border-border bg-background px-3 h-10 text-sm" />
+                  </label>)}
+                </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-medium text-muted-foreground mb-1" style={{ fontFamily: "DM Mono, monospace" }}>
@@ -1119,7 +1038,7 @@ function RegisterEmployerView({ onRegister }: { onRegister: (account: NewAccount
                 Certificações de qualificação
               </h2>
               <p className="text-sm text-muted-foreground mb-5">
-                Para garantir a autenticidade do recrutamento, confirme que sua empresa atende aos seguintes requisitos:
+                Declare os requisitos abaixo. A empresa também precisará enviar documentos e passar por revisão administrativa antes de publicar vagas:
               </p>
               <div className="space-y-3">
                 {[
@@ -1127,15 +1046,8 @@ function RegisterEmployerView({ onRegister }: { onRegister: (account: NewAccount
                   { k: "cert2", label: "Empresa sem pendências no Cadastro de Empregadores (Lista Suja do MTE)" },
                   { k: "cert3", label: "Responsável pelo cadastro autorizado a recrutar em nome da empresa" },
                 ].map((c) => (
-                  <label key={c.k} className="flex items-start gap-3 cursor-pointer group">
-                    <div
-                      className={`mt-0.5 w-5 h-5 border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
-                        (form as any)[c.k] ? "border-primary bg-primary" : "border-border"
-                      }`}
-                      onClick={() => update(c.k, !(form as any)[c.k])}
-                    >
-                      {(form as any)[c.k] && <span className="text-white text-xs">✓</span>}
-                    </div>
+                  <label key={c.k} className="flex items-start gap-3 cursor-pointer">
+                    <input type="checkbox" checked={Boolean((form as any)[c.k])} onChange={e=>update(c.k,e.target.checked)} className="mt-1 h-4 w-4 accent-primary" />
                     <span className="text-sm text-muted-foreground">{c.label}</span>
                   </label>
                 ))}
@@ -1152,13 +1064,7 @@ function RegisterEmployerView({ onRegister }: { onRegister: (account: NewAccount
                 </button>
                 <button
                   disabled={!form.cert1 || !form.cert2 || !form.cert3}
-                  onClick={() => onRegister({
-                    name: form.name || "Empregador",
-                    email: form.email,
-                    password: form.password,
-                    role: "employer",
-                    company: form.company,
-                  })}
+                  onClick={() => onRegister({ ...form, role: "employer" })}
                   className="flex-1 bg-primary text-primary-foreground py-2.5 text-sm font-medium hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Criar conta
@@ -1281,10 +1187,12 @@ function EmployerDashboard({
   user,
   onNavigate,
   jobs,
+  applications,
 }: {
   user: User;
   onNavigate: (v: View) => void;
   jobs: Job[];
+  applications: Application[];
 }) {
   const myJobs = jobs.filter((j) => j.employerId === user.id);
 
@@ -1309,10 +1217,10 @@ function EmployerDashboard({
 
       <div className="grid md:grid-cols-4 gap-4 mb-8">
         {[
-          { label: "Vagas ativas", value: myJobs.length, icon: "💼" },
-          { label: "Candidatos recebidos", value: 23, icon: "👥" },
-          { label: "Em entrevista", value: 5, icon: "🗓" },
-          { label: "Vagas encerradas", value: 2, icon: "✅" },
+          { label: "Vagas ativas", value: myJobs.filter(j=>j.status==="active"&&j.deadline>=new Date().toISOString().slice(0,10)).length, icon: "💼" },
+          { label: "Candidatos recebidos", value: applications.length, icon: "👥" },
+          { label: "Em entrevista", value: applications.filter(a=>a.status==="Entrevista").length, icon: "🗓" },
+          { label: "Vagas encerradas", value: myJobs.filter(j=>j.status!=="active").length, icon: "✅" },
         ].map((s) => (
           <div key={s.label} className="bg-card border border-border p-4">
             <div className="text-2xl mb-1">{s.icon}</div>
@@ -1356,6 +1264,7 @@ function EmployerDashboard({
           {[
             { icon: "➕", title: "Publicar nova vaga", desc: "Adicionar vaga ao banco de dados", action: () => onNavigate("post-job") },
             { icon: "📝", title: "Gerenciar vagas", desc: "Editar, estender prazos ou excluir", action: () => onNavigate("manage-jobs") },
+            { icon: "👥", title: "Candidaturas recebidas", desc: "Acompanhar os candidatos e mudar status", action: () => onNavigate("employer-applicants") },
             { icon: "💰", title: "Simulador salarial", desc: "Compare faixas e planeje contratações", action: () => onNavigate("home") },
           ].map((a) => (
             <button
@@ -1396,6 +1305,8 @@ function JobsView({
   const [search, setSearch] = useState("");
   const [areaFilter, setAreaFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
+  const [stateFilter,setStateFilter] = useState("");
+  const [minSalary,setMinSalary] = useState("");
 
   const areas = [...new Set(jobs.map((j) => j.area))];
   const types = [...new Set(jobs.map((j) => j.type))];
@@ -1403,9 +1314,12 @@ function JobsView({
   const filtered = jobs.filter((j) => {
     const q = search.toLowerCase();
     return (
+      j.status === "active" && j.deadline >= new Date().toISOString().slice(0,10) &&
       (j.title.toLowerCase().includes(q) || j.company.toLowerCase().includes(q) || j.location.toLowerCase().includes(q)) &&
       (!areaFilter || j.area === areaFilter) &&
-      (!typeFilter || j.type === typeFilter)
+      (!typeFilter || j.type === typeFilter) &&
+      (!stateFilter || j.state === stateFilter) &&
+      (!minSalary || j.salary >= Number(minSalary))
     );
   });
 
@@ -1447,8 +1361,14 @@ function JobsView({
           <option value="">CLT ou PJ</option>
           {types.map((t) => <option key={t}>{t}</option>)}
         </select>
+        <select aria-label="Filtrar por estado" value={stateFilter} onChange={e=>setStateFilter(e.target.value)} className="border border-border bg-background px-3 h-10 text-sm">
+          <option value="">Todos os estados</option>
+          {[...new Set(jobs.map(j=>j.state).filter(Boolean))].sort().map(st=><option key={st}>{st}</option>)}
+        </select>
+        <input aria-label="Salário mínimo desejado" type="number" min="0" value={minSalary} onChange={e=>setMinSalary(e.target.value)} placeholder="Salário mín. R$" className="w-36 border border-border bg-background px-2 h-10 text-sm" />
       </div>
 
+      {user?.role==="worker"&&user.area&&<p className="text-xs text-muted-foreground mb-2">Sua área de interesse: {user.area}. Use os filtros para encontrar vagas compatíveis.</p>}
       <p className="text-sm text-muted-foreground mb-4">
         {filtered.length} vaga{filtered.length !== 1 ? "s" : ""} encontrada{filtered.length !== 1 ? "s" : ""}
       </p>
@@ -1709,203 +1629,58 @@ function ApplicationsView({
   );
 }
 
-// ─── Help Center ──────────────────────────────────────────────────────────────
-function HelpCenterView() {
-  const [activeTab, setActiveTab] = useState<"benefits" | "ngos">("benefits");
-
-  const benefits = [
-    {
-      name: "Seguro-Desemprego",
-      desc: "Auxílio temporário para trabalhadores dispensados sem justa causa.",
-      req: "Tempo de trabalho: mínimo 12 meses (1ª solicitação), 9 meses (2ª) ou 6 meses (demais).",
-      value: "De 80% a 50% do salário médio, por 3 a 5 parcelas.",
-      icon: "🛡️",
-    },
-    {
-      name: "Abono Salarial (PIS/PASEP)",
-      desc: "Benefício anual equivalente a um salário mínimo para trabalhadores de baixa renda.",
-      req: "Cadastrado no PIS/PASEP há pelo menos 5 anos; ganhar até 2 salários mínimos.",
-      value: "De R$ 118 a R$ 1.412 (proporcional aos meses trabalhados).",
-      icon: "💵",
-    },
-    {
-      name: "Vale-Alimentação / Vale-Refeição",
-      desc: "Benefício alimentar fornecido pelo empregador via PAT (Programa de Alimentação do Trabalhador).",
-      req: "Empresa participante do PAT. Não há desconto no salário ou apenas desconto simbólico.",
-      value: "Definido pela empresa, em média R$ 450–R$ 1.000/mês.",
-      icon: "🍽️",
-    },
-    {
-      name: "Auxílio-Doença (INSS)",
-      desc: "Benefício para trabalhador temporariamente incapacitado por doença ou acidente.",
-      req: "Contribuição mínima de 12 meses (exceto acidente de trabalho). Carência não exigida para acidente.",
-      value: "91% do salário de benefício, calculado com base na média das contribuições.",
-      icon: "🏥",
-    },
-    {
-      name: "Bolsa Família",
-      desc: "Programa de transferência de renda para famílias em situação de pobreza ou extrema pobreza.",
-      req: "Renda familiar per capita de até R$ 218 (extrema pobreza) ou R$ 218–R$ 660 (pobreza).",
-      value: "Benefício básico de R$ 600 + complementos por criança/gestante/nutriz.",
-      icon: "👨‍👩‍👧",
-    },
-    {
-      name: "BPC (Benefício de Prestação Continuada)",
-      desc: "Renda mensal vitalícia para idosos com 65+ anos ou pessoas com deficiência.",
-      req: "Renda familiar per capita menor que 1/4 do salário mínimo.",
-      value: "1 salário mínimo (R$ 1.412 em 2024).",
-      icon: "👴",
-    },
-  ];
-
-  const ngos = [
-    {
-      name: "CRAS (Centro de Referência de Assistência Social)",
-      services: ["Orientação sobre programas sociais", "Encaminhamento ao CREAS", "Apoio à família em vulnerabilidade"],
-      region: "Nacional — 8.200 unidades no Brasil",
-      contact: "Ligue 156 no seu município",
-      icon: "🏛️",
-    },
-    {
-      name: "Sine (Sistema Nacional de Emprego)",
-      services: ["Intermediação de emprego", "Emissão de Carteira de Trabalho", "Seguro-Desemprego"],
-      region: "Nacional — presente em todos os estados",
-      contact: "App Sine Fácil ou 158",
-      icon: "💼",
-    },
-    {
-      name: "Instituto Serrana de Desenvolvimento Social",
-      services: ["Capacitação profissional gratuita", "Cursos de informática e panificação", "Apoio psicossocial"],
-      region: "Regiões Nordeste e Centro-Oeste",
-      contact: "(85) 3344-5678",
-      icon: "🌱",
-    },
-    {
-      name: "Ação Social Arquidiocesana (ASA)",
-      services: ["Distribuição de cestas básicas", "Apoio jurídico trabalhista gratuito", "Acolhimento a imigrantes"],
-      region: "São Paulo, Rio de Janeiro, Minas Gerais",
-      contact: "asa@asa.org.br",
-      icon: "⛪",
-    },
-    {
-      name: "Instituto Dom Bosco",
-      services: ["Cursos técnicos gratuitos", "Inclusão digital", "Preparação para o mercado de trabalho"],
-      region: "15 estados brasileiros",
-      contact: "www.idb.org.br",
-      icon: "📚",
-    },
-  ];
-
-  return (
-    <div className="max-w-4xl mx-auto px-4 py-8">
-      <div className="mb-6">
-        <p className="text-xs text-muted-foreground mb-1" style={{ fontFamily: "DM Mono, monospace" }}>
-          CENTRAL DE AJUDA
-        </p>
-        <h1 className="text-3xl font-semibold" style={{ fontFamily: "Fraunces, serif" }}>
-          Benefícios e suporte social
-        </h1>
-        <p className="text-muted-foreground mt-2 text-sm">
-          Informações sobre os benefícios que correspondem ao seu perfil e organizações que podem oferecer assistência.
-        </p>
-      </div>
-
-      <div className="flex border-b border-border mb-6">
-        {(["benefits", "ngos"] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setActiveTab(t)}
-            className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-              activeTab === t
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {t === "benefits" ? "Benefícios sociais" : "ONGs e assistência"}
-          </button>
-        ))}
-      </div>
-
-      {activeTab === "benefits" && (
-        <div className="space-y-4">
-          {benefits.map((b) => (
-            <div key={b.name} className="bg-card border border-border p-5">
-              <div className="flex items-start gap-4">
-                <span className="text-3xl flex-shrink-0">{b.icon}</span>
-                <div className="flex-1">
-                  <h3 className="font-semibold mb-1" style={{ fontFamily: "Fraunces, serif" }}>{b.name}</h3>
-                  <p className="text-sm text-muted-foreground mb-3">{b.desc}</p>
-                  <div className="grid md:grid-cols-2 gap-3">
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground mb-1" style={{ fontFamily: "DM Mono, monospace" }}>
-                        REQUISITOS
-                      </p>
-                      <p className="text-xs text-muted-foreground">{b.req}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground mb-1" style={{ fontFamily: "DM Mono, monospace" }}>
-                        VALOR / COBERTURA
-                      </p>
-                      <p className="text-xs font-medium text-primary">{b.value}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {activeTab === "ngos" && (
-        <div className="space-y-4">
-          {ngos.map((o) => (
-            <div key={o.name} className="bg-card border border-border p-5">
-              <div className="flex items-start gap-4">
-                <span className="text-3xl flex-shrink-0">{o.icon}</span>
-                <div className="flex-1">
-                  <h3 className="font-semibold mb-1" style={{ fontFamily: "Fraunces, serif" }}>{o.name}</h3>
-                  <p className="text-xs text-muted-foreground mb-2" style={{ fontFamily: "DM Mono, monospace" }}>
-                    {o.region}
-                  </p>
-                  <div className="flex flex-wrap gap-1.5 mb-3">
-                    {o.services.map((s) => (
-                      <span key={s} className="text-xs bg-secondary border border-border px-2 py-0.5">
-                        {s}
-                      </span>
-                    ))}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    <strong>Contato:</strong> {o.contact}
-                  </p>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+// ─── Central de ajuda: informações persistidas, de fonte oficial ──────────────
+function HelpCenterView({ programs, user }: { programs: SocialProgram[]; user: User | null }) {
+  const [activeTab, setActiveTab] = useState<"benefit" | "service">("benefit");
+  const [state, setState] = useState(user?.state || "");
+  const [city, setCity] = useState(user?.city || "");
+  const filtered = programs.filter(p => p.kind === activeTab &&
+    (p.scope === "national" || (p.state?.toUpperCase() === state.toUpperCase() &&
+       (p.scope === "state" || !city || p.city?.toLowerCase() === city.toLowerCase()))));
+  return <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
+    <header><p className="text-xs text-muted-foreground">CENTRAL DE AJUDA · FONTES OFICIAIS</p>
+      <h1 className="text-3xl font-semibold mb-2">Benefícios e serviços de assistência</h1>
+      <p className="text-sm text-muted-foreground">Informações de referência, não avaliação automática de elegibilidade. Consulte sempre o atendimento oficial.</p></header>
+    <div className="grid md:grid-cols-2 gap-3">
+      <label className="text-sm">Estado (UF)<input aria-label="Estado (UF)" maxLength={2} value={state} onChange={e=>setState(e.target.value.toUpperCase())} placeholder="Ex.: SP" className="mt-1 w-full border border-border bg-background p-2" /></label>
+      <label className="text-sm">Cidade<input aria-label="Cidade" value={city} onChange={e=>setCity(e.target.value)} placeholder="Ex.: São Paulo" className="mt-1 w-full border border-border bg-background p-2" /></label>
     </div>
-  );
+    <div className="flex gap-2 border-b border-border">
+      <button onClick={()=>setActiveTab("benefit")} className={`px-4 py-2 ${activeTab==="benefit"?"border-b-2 border-primary font-bold":""}`}>Benefícios sociais</button>
+      <button onClick={()=>setActiveTab("service")} className={`px-4 py-2 ${activeTab==="service"?"border-b-2 border-primary font-bold":""}`}>Serviços de apoio</button>
+    </div>
+    <p className="text-xs text-muted-foreground">{filtered.length} registro(s) verificados. Catálogo inicial nacional, expansível via banco por município/estado.</p>
+    {!filtered.length && <p className="border border-border p-6">Nenhum registro disponível para esta região. Consulte o CRAS municipal para orientação.</p>}
+    {filtered.map(p=><article className="bg-card border border-border p-5 space-y-2" key={p.id}>
+      <h2 className="text-lg font-semibold">{p.name}</h2><p className="text-sm">{p.desc}</p>
+      <p className="text-sm text-muted-foreground"><strong>Requisitos / atendimento:</strong> {p.req}</p>
+      <p className="text-xs text-muted-foreground">Abrangência: {p.coverage} · Verificado em: {p.verifiedAt}</p>
+      <div className="flex flex-wrap gap-3">{p.sources.map(s=><a className="text-sm text-primary underline break-all" key={s.reference_url} href={s.reference_url} target="_blank" rel="noopener noreferrer">Fonte: {s.name} ↗</a>)}</div>
+    </article>)}
+  </div>;
 }
 
 // ─── Post Job View ────────────────────────────────────────────────────────────
 function PostJobView({
   onPost,
   onNavigate,
+  editingJob,
 }: {
   onPost: (j: Partial<Job>) => void;
   onNavigate: (v: View) => void;
+  editingJob?: Job | null;
 }) {
   const [form, setForm] = useState({
-    title: "",
-    location: "",
-    salary: "",
-    type: "CLT",
-    area: "",
-    deadline: "",
-    benefits: "",
-    description: "",
-    requirements: "",
-    process: "",
+    title: editingJob?.title || "",
+    location: editingJob?.location || "",
+    salary: editingJob?.salary.toString() || "",
+    type: editingJob?.type || "CLT",
+    area: editingJob?.area || "",
+    deadline: editingJob?.deadline || "",
+    benefits: editingJob?.benefits.join(", ") || "",
+    description: editingJob?.description || "",
+    requirements: editingJob?.requirements.join("\n") || "",
+    process: editingJob?.process || "",
   });
 
   const update = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
@@ -1947,7 +1722,7 @@ function PostJobView({
           EMPREGADOR
         </p>
         <h1 className="text-3xl font-semibold" style={{ fontFamily: "Fraunces, serif" }}>
-          Publicar nova vaga
+          {editingJob ? "Editar vaga" : "Publicar nova vaga"}
         </h1>
       </div>
 
@@ -2035,12 +1810,12 @@ function PostJobView({
                 description: form.description,
                 requirements: form.requirements.split("\n").filter(Boolean),
                 process: form.process,
-                employerId: "my-employer",
+                id: editingJob?.id,
               });
             }}
             className="flex-1 bg-primary text-primary-foreground py-2.5 text-sm font-medium hover:opacity-90"
           >
-            Publicar vaga
+            {editingJob ? "Salvar alterações" : "Publicar vaga"}
           </button>
         </div>
       </div>
@@ -2055,12 +1830,14 @@ function ManageJobsView({
   onDelete,
   onExtend,
   onNavigate,
+  onEdit,
 }: {
   jobs: Job[];
   ownerId: string;
   onDelete: (id: number) => void;
   onExtend: (id: number) => void;
   onNavigate: (v: View) => void;
+  onEdit: (job: Job) => void;
 }) {
   const myJobs = jobs.filter((j) => j.employerId === ownerId);
   const fmt = (n: number) => n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -2105,9 +1882,10 @@ function ManageJobsView({
                 </div>
                 <div className="text-right">
                   <p className="text-xs text-muted-foreground mb-3">
-                    Prazo: {new Date(j.deadline).toLocaleDateString("pt-BR")}
+                    Prazo: {new Date(j.deadline+"T12:00:00").toLocaleDateString("pt-BR")} · {j.status === "active" ? "Ativa" : "Encerrada"}
                   </p>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2 justify-end">
+                    <button onClick={()=>onEdit(j)} className="text-xs border border-border px-3 py-1.5 hover:bg-muted">Editar</button>
                     <button
                       onClick={() => onExtend(j.id)}
                       className="text-xs border border-border px-3 py-1.5 hover:bg-muted transition-colors"
@@ -2171,6 +1949,8 @@ function SimHistoryView({
                   {fmt(h.salary)}
                 </span>
               </div>
+              {h.kind === "life" && <div className="mb-3 text-sm"><p><strong>Simulação de vida {h.city ? `· ${h.city}` : ""}</strong></p><p>Despesas: {fmt(h.totalExpenses||0)} · Saldo final: {fmt(h.finalBalance||0)}</p>
+                {(h.expenses||[]).map((e,i)=><p className="text-xs text-muted-foreground" key={i}>{e.category}: {fmt(e.amount)}</p>)}</div>}
               <div className="grid grid-cols-4 gap-3">
                 {[
                   { label: "INSS", value: h.inss, color: "text-amber-700" },
@@ -2195,96 +1975,26 @@ function SimHistoryView({
 }
 
 // ─── Profile View ─────────────────────────────────────────────────────────────
-function ProfileView({
-  user,
-  onUpdate,
-}: {
-  user: User;
-  onUpdate: (name: string) => Promise<void>;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(user.name);
-
-  return (
-    <div className="max-w-2xl mx-auto px-4 py-8">
-      <div className="mb-6">
-        <p className="text-xs text-muted-foreground mb-1" style={{ fontFamily: "DM Mono, monospace" }}>
-          MEU PERFIL
-        </p>
-        <h1 className="text-3xl font-semibold" style={{ fontFamily: "Fraunces, serif" }}>
-          Dados da conta
-        </h1>
-      </div>
-      <div className="bg-card border border-border p-6">
-        <div className="flex items-center gap-4 mb-6">
-          <div className="w-16 h-16 bg-primary text-primary-foreground flex items-center justify-center text-2xl font-bold" style={{ fontFamily: "Fraunces, serif" }}>
-            {user.name.charAt(0).toUpperCase()}
-          </div>
-          <div>
-            <p className="font-semibold text-lg">{user.name}</p>
-            <p className="text-sm text-muted-foreground">{user.email}</p>
-            <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 mt-1 inline-block" style={{ fontFamily: "DM Mono, monospace" }}>
-              {user.role === "worker" ? "TRABALHADOR" : "EMPREGADOR"}
-            </span>
-          </div>
-        </div>
-
-        <hr className="border-border mb-5" />
-
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-muted-foreground mb-1" style={{ fontFamily: "DM Mono, monospace" }}>
-              NOME
-            </label>
-            {editing ? (
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full border border-border bg-background px-3 h-10 text-sm outline-none focus:border-ring"
-              />
-            ) : (
-              <p className="text-sm">{user.name}</p>
-            )}
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-muted-foreground mb-1" style={{ fontFamily: "DM Mono, monospace" }}>
-              E-MAIL
-            </label>
-            <p className="text-sm">{user.email}</p>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-muted-foreground mb-1" style={{ fontFamily: "DM Mono, monospace" }}>
-              TIPO DE CONTA
-            </label>
-            <p className="text-sm capitalize">{user.role === "worker" ? "Trabalhador" : "Empregador"}</p>
-          </div>
-        </div>
-
-        <div className="mt-6 flex gap-3">
-          {editing ? (
-            <>
-              <button onClick={() => setEditing(false)} className="flex-1 border border-border py-2 text-sm hover:bg-muted">
-                Cancelar
-              </button>
-              <button
-                onClick={async () => {
-                  await onUpdate(name);
-                  setEditing(false);
-                }}
-                className="flex-1 bg-primary text-primary-foreground py-2 text-sm hover:opacity-90"
-              >
-                Salvar alterações
-              </button>
-            </>
-          ) : (
-            <button onClick={() => setEditing(true)} className="bg-primary text-primary-foreground px-4 py-2 text-sm hover:opacity-90">
-              Editar dados
-            </button>
-          )}
-        </div>
-      </div>
+function ProfileView({ user, onUpdate }: { user:User; onUpdate:(data:Partial<User>)=>Promise<void> }) {
+  const [editing,setEditing]=useState(false);
+  const [form,setForm]=useState<Partial<User>>({...user});
+  const keys:[keyof User,string][]=[ ["name","Nome"],["phone","Telefone"],["city","Cidade"],["state","Estado (UF)"],
+    ...(user.role==="worker"?[["education","Escolaridade"],["area","Área de atuação"],["skills","Habilidades"],["experience","Experiência"],["resume","Currículo / apresentação"]] as [keyof User,string][]
+    : [["sector","Setor da empresa"],["company_size","Porte da empresa"]] as [keyof User,string][]) ];
+  return <div className="max-w-2xl mx-auto px-4 py-8">
+    <h1 className="text-3xl font-semibold mb-6">Meu perfil</h1>
+    <div className="bg-card border border-border p-6 space-y-4">
+      <p className="text-sm text-muted-foreground">E-mail: {user.email}</p>
+      <p className="text-sm text-muted-foreground">{user.role==="worker"?`CPF: ${user.cpf||"Não informado"}`:`Empresa: ${user.company||""} · CNPJ: ${user.cnpj||""}`}</p>
+      {user.role==="employer"&&<p className="text-sm font-semibold">Verificação documental: {user.verification_status === "approved"?"Aprovado":user.verification_status==="rejected"?"Rejeitado — reenvie documentos":"Pendente"} {user.verification_notes||""}</p>}
+      {keys.map(([key,label])=><label key={key} className="block text-xs text-muted-foreground">{label}
+        {editing?<textarea rows={key==="resume"||key==="experience"?3:1} value={String(form[key]||"")} onChange={e=>setForm(f=>({...f,[key]:e.target.value}))} className="mt-1 w-full p-2 bg-background border border-border text-sm" />
+          :<p className="text-sm text-foreground mt-1">{String(user[key]||"Não informado")}</p>}
+      </label>)}
+      {editing?<div className="flex gap-3"><button onClick={()=>setEditing(false)} className="border border-border p-2">Cancelar</button><button className="bg-primary text-primary-foreground p-2" onClick={async()=>{try{await onUpdate(form);setEditing(false);}catch(e){alert(e instanceof Error?e.message:"Não foi possível salvar");}}}>Salvar</button></div>
+        :<button className="bg-primary text-primary-foreground p-2" onClick={()=>{setForm({...user});setEditing(true);}}>Editar perfil</button>}
     </div>
-  );
+  </div>;
 }
 
 // ─── Status Badge ─────────────────────────────────────────────────────────────
@@ -2356,14 +2066,20 @@ function Footer({ onNavigate }: { onNavigate: (v: View) => void }) {
 export default function App() {
   const [view, setView] = useState<View>("home");
   const [user, setUser] = useState<User | null>(null);
-  const [jobs, setJobs] = useState<Job[]>(INITIAL_JOBS);
+  const [jobs, setJobs] = useState<Job[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
   const [simHistory, setSimHistory] = useState<SimHistory[]>([]);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [gameConfig, setGameConfig] = useState<GameConfig | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError,setLoadError] = useState("");
+  const [stats,setStats] = useState<Stats>({workers:0,employers:0,activeJobs:0});
+  const [programs,setPrograms] = useState<SocialProgram[]>([]);
+  const [notifications,setNotifications] = useState<Notification[]>([]);
+  const [employerApplications,setEmployerApplications]=useState<Application[]>([]);
+  const [editingJob,setEditingJob]=useState<Job|null>(null);
 
-  const navigate = useCallback((v: View) => setView(v), []);
+  const navigate = useCallback((v: View) => { if(v==="post-job")setEditingJob(null);setView(v); }, []);
 
   const loadData = useCallback(async () => {
     const data = await api<{
@@ -2371,8 +2087,10 @@ export default function App() {
       profile: User | null;
       applications: Application[];
       simulations: SimHistory[];
+      programs: SocialProgram[]; stats: Stats; notifications: Notification[]; employerApplications: Application[];
     }>("/bootstrap");
-    setJobs([...INITIAL_JOBS, ...data.jobs]);
+    setJobs(data.jobs);setStats(data.stats);setPrograms(data.programs);setNotifications(data.notifications);setEmployerApplications(data.employerApplications);
+    setLoadError("");
     setUser(data.profile);
     setApplications(data.applications);
     setSimHistory(data.simulations);
@@ -2381,7 +2099,7 @@ export default function App() {
 
   useEffect(() => {
     loadData()
-      .catch((error) => console.error("Erro ao carregar dados:", error))
+      .catch((error) => {console.error("Erro ao carregar dados:", error);setLoadError(error instanceof Error ? error.message : "Falha no carregamento.");})
       .finally(() => setLoading(false));
   }, [loadData]);
 
@@ -2390,16 +2108,16 @@ export default function App() {
     if (error) throw new Error("E-mail ou senha inválidos.");
     const profile = await loadData();
     if (!profile) throw new Error("Não foi possível carregar seu perfil.");
-    setView(profile.role === "employer" ? "employer-dashboard" : "worker-dashboard");
+    setView(profile.role === "admin" ? "admin" : profile.role === "employer" ? "employer-dashboard" : "worker-dashboard");
   };
 
   const handleRegister = async (account: NewAccount) => {
     try {
-      await api("/signup", {
-        method: "POST",
-        body: JSON.stringify(account),
+      const result = await api<{requiresEmailConfirmation:boolean;needsEmployerVerification:boolean}>("/signup", {
+        method: "POST", body: JSON.stringify(account),
       });
-      await handleLogin(account.email, account.password);
+      if(result.requiresEmailConfirmation){alert("Conta criada! Confirme o e-mail pelo link enviado e depois entre. Caso seja empregador, envie os documentos após entrar.");setView("login");}
+      else await handleLogin(account.email, account.password);
     } catch (error) {
       alert(error instanceof Error ? error.message : "Não foi possível criar a conta.");
     }
@@ -2409,7 +2127,8 @@ export default function App() {
     await supabase.auth.signOut();
     setUser(null);
     setApplications([]);
-    setSimHistory([]);
+    setSimHistory([]);setNotifications([]);setEmployerApplications([]);
+    await loadData();
     setView("home");
   };
 
@@ -2420,8 +2139,6 @@ export default function App() {
         method: "POST",
         body: JSON.stringify({
           jobId: job.id,
-          jobTitle: job.title,
-          company: job.company,
         }),
       });
       setApplications((prev) => [...prev, application]);
@@ -2441,12 +2158,12 @@ export default function App() {
 
   const handlePostJob = async (job: Partial<Job>) => {
     try {
-      const data = await api<{ job: Job }>("/jobs", {
-        method: "POST",
+      const data = await api<{ job: Job }>(job.id ? `/jobs/${job.id}` : "/jobs", {
+        method: job.id ? "PUT" : "POST",
         body: JSON.stringify(job),
       });
-      setJobs((prev) => [...prev, data.job]);
-      setView("manage-jobs");
+      setJobs((prev) => job.id ? prev.map(j=>j.id===job.id?data.job:j) : [...prev, data.job]);
+      setEditingJob(null);setView("manage-jobs");
     } catch (error) {
       alert(error instanceof Error ? error.message : "Não foi possível publicar a vaga.");
     }
@@ -2486,12 +2203,21 @@ export default function App() {
     }
   };
 
-  const handleUpdateProfile = async (name: string) => {
+  const handleUpdateProfile = async (changes: Partial<User>) => {
     const { profile } = await api<{ profile: User }>("/profile", {
       method: "PUT",
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(changes),
     });
     setUser(profile);
+  };
+
+  const handleApplicationStatus = async (id:string,status:string) => {
+    const {application} = await api<{application:Application}>(`/applications/${id}/status`,{method:"PUT",body:JSON.stringify({status})});
+    setEmployerApplications(prev=>prev.map(a=>a.id===id?{...a,status:application.status}:a));
+  };
+  const handleRead = async (id:string) => {
+    await api(`/notifications/${id}/read`,{method:"PUT"});
+    setNotifications(prev=>prev.map(n=>n.id===id?{...n,read:true}:n));
   };
 
   const renderView = () => {
@@ -2503,6 +2229,7 @@ export default function App() {
             onNavigate={navigate}
             simHistory={simHistory}
             onSaveHistory={handleSaveSimulation}
+            stats={stats}
           />
         );
       case "login":
@@ -2519,7 +2246,7 @@ export default function App() {
         ) : null;
       case "employer-dashboard":
         return user ? (
-          <EmployerDashboard user={user} onNavigate={navigate} jobs={jobs} />
+          <EmployerDashboard user={user} onNavigate={navigate} jobs={jobs} applications={employerApplications} />
         ) : null;
       case "jobs":
         return (
@@ -2543,13 +2270,13 @@ export default function App() {
           />
         ) : null;
       case "help-center":
-        return <HelpCenterView />;
+        return <HelpCenterView programs={programs} user={user} />;
       case "applications":
         return (
           <ApplicationsView applications={applications} onWithdraw={handleWithdraw} onNavigate={navigate} />
         );
       case "post-job":
-        return <PostJobView onPost={handlePostJob} onNavigate={navigate} />;
+        return <PostJobView key={editingJob?.id || "new"} editingJob={editingJob} onPost={handlePostJob} onNavigate={navigate} />;
       case "manage-jobs":
         return (
           <ManageJobsView
@@ -2558,12 +2285,21 @@ export default function App() {
             onDelete={handleDeleteJob}
             onExtend={handleExtendJob}
             onNavigate={navigate}
+            onEdit={(j)=>{setEditingJob(j);setView("post-job");}}
           />
         );
       case "simulator-history":
         return <SimHistoryView history={simHistory} onNavigate={navigate} />;
       case "profile":
-        return user ? <ProfileView user={user} onUpdate={handleUpdateProfile} /> : null;
+        return user ? <div><ProfileView user={user} onUpdate={handleUpdateProfile} />
+          {user.role==="employer"&&<div className="max-w-2xl mx-auto px-4 pb-6"><EmployerVerification status={user.verification_status} notes={user.verification_notes} onUploaded={async()=>{await loadData();}} /></div>}
+        </div> : null;
+      case "employer-applicants":
+        return user?.role==="employer"||user?.role==="admin" ? <EmployerApplicantPanel applications={employerApplications} onStatus={handleApplicationStatus}/> : null;
+      case "admin":
+        return user?.role==="admin"?<AdminPanel refresh={loadData} jobs={jobs} onArchive={async id=>{await api(`/jobs/${id}`,{method:"DELETE"});await loadData();}}/>:null;
+      case "notifications":
+        return user?<NotificationsPanel items={notifications} onRead={handleRead}/>:null;
       case "sim-intro":
         return (
           <SimIntroView
@@ -2575,7 +2311,7 @@ export default function App() {
         );
       case "sim-game":
         return gameConfig ? (
-          <SimGameView config={gameConfig} onQuit={() => navigate("home")} />
+          <SimGameView config={gameConfig} onQuit={() => navigate("home")} onComplete={user ? handleSaveSimulation : undefined} />
         ) : null;
       default:
         return null;
@@ -2596,6 +2332,13 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-background">
       {!isAuthView && !isFullscreenView && <Nav user={user} onNavigate={navigate} onLogout={handleLogout} />}
+      {!isAuthView && !isFullscreenView && user && <nav aria-label="Ações da conta" className="flex flex-wrap justify-end gap-3 px-5 py-2 text-sm border-b border-border">
+        {user.role==="employer"&&user.verification_status!=="approved"&&<button className="text-amber-700 underline" onClick={()=>setView("profile")}>Verificação: {user.verification_status||"pendente"} — enviar documentos</button>}
+        {user.role==="employer"&&<button className="text-primary underline" onClick={()=>setView("employer-applicants")}>Candidatos ({employerApplications.length})</button>}
+        {user.role==="admin"&&<button className="text-primary underline" onClick={()=>setView("admin")}>Administração</button>}
+        <button className="text-primary underline" onClick={()=>setView("notifications")}>Notificações ({notifications.filter(n=>!n.read).length})</button>
+      </nav>}
+      {loadError&&<div role="alert" className="bg-amber-50 border-b border-amber-200 text-amber-950 px-5 py-3 text-sm">Backend não disponível: {loadError} <button className="underline ml-3" onClick={()=>void loadData().catch(e=>setLoadError(String(e)))}>Tentar novamente</button></div>}
       <main className="flex-1">{renderView()}</main>
       {!isAuthView && !isFullscreenView && <Footer onNavigate={navigate} />}
     </div>

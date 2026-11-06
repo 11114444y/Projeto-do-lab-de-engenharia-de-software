@@ -73,3 +73,9 @@ O sistema irá conectar pessoas em vulnerabilidade financeira com pessoas que qu
 
 
 **_Para mais informações consultar a wiki._**
+
+---
+
+### Versão integrada — novembro de 2026
+
+Esta versão possui banco relacional ampliado, frontend ligado às APIs e rotinas de revisão documental, candidaturas, notificações, simulação de vida com histórico e central social alimentada por fontes oficiais. **Instruções de implantação, segurança, limitações e checklist de validação:** [docs/IMPLEMENTACAO_FINAL.md](docs/IMPLEMENTACAO_FINAL.md). Para rodar localmente, configure um Supabase, aplique as migrações, publique a Edge Function e execute `corepack enable && pnpm install --frozen-lockfile && pnpm dev`. Não existem vagas fictícias no fluxo operacional: as vagas devem ser cadastradas por empregador verificado.
