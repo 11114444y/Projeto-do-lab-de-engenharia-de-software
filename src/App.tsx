@@ -717,6 +717,51 @@ function RegisterView({ onNavigate }: { onNavigate: (v: View) => void }) {
   );
 }
 
+// ─── Campos de formulário (nível do módulo) ──────────────────────────────────
+// Importante: estes componentes NÃO podem ser declarados dentro de outro componente.
+// Se fossem, o React os recriaria a cada tecla e o campo perderia o foco.
+type FormProps = { form: Record<string, string>; update: (k: string, v: string) => void };
+
+function InputField({ label, k, placeholder, type = "text", form, update }: {
+  label: string; k: string; placeholder: string; type?: string;
+} & FormProps) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-muted-foreground mb-1" style={{ fontFamily: "DM Mono, monospace" }}>
+        {label}
+      </label>
+      <input
+        type={type}
+        value={form[k]}
+        onChange={(e) => update(k, e.target.value)}
+        placeholder={placeholder}
+        className="w-full border border-border bg-background px-3 h-10 text-sm outline-none focus:border-ring transition-colors"
+      />
+    </div>
+  );
+}
+
+const Field = InputField;
+
+function Textarea({ label, k, placeholder, rows = 3, form, update }: {
+  label: string; k: string; placeholder: string; rows?: number;
+} & FormProps) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-muted-foreground mb-1" style={{ fontFamily: "DM Mono, monospace" }}>
+        {label}
+      </label>
+      <textarea
+        value={form[k]}
+        onChange={(e) => update(k, e.target.value)}
+        placeholder={placeholder}
+        rows={rows}
+        className="w-full border border-border bg-background px-3 py-2 text-sm outline-none focus:border-ring resize-none"
+      />
+    </div>
+  );
+}
+
 function RegisterWorkerView({ onRegister }: { onRegister: (account: NewAccount) => void }) {
   const [step, setStep] = useState(1);
   const [form, setForm] = useState({
@@ -736,20 +781,6 @@ function RegisterWorkerView({ onRegister }: { onRegister: (account: NewAccount) 
 
   const update = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
-  const InputField = ({ label, k, placeholder, type = "text" }: { label: string; k: string; placeholder: string; type?: string }) => (
-    <div>
-      <label className="block text-xs font-medium text-muted-foreground mb-1" style={{ fontFamily: "DM Mono, monospace" }}>
-        {label}
-      </label>
-      <input
-        type={type}
-        value={(form as any)[k]}
-        onChange={(e) => update(k, e.target.value)}
-        placeholder={placeholder}
-        className="w-full border border-border bg-background px-3 h-10 text-sm outline-none focus:border-ring transition-colors"
-      />
-    </div>
-  );
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4 py-8">
@@ -779,15 +810,15 @@ function RegisterWorkerView({ onRegister }: { onRegister: (account: NewAccount) 
                 Dados pessoais
               </h2>
               <div className="space-y-4">
-                <InputField label="NOME COMPLETO" k="name" placeholder="Maria da Silva" />
-                <InputField label="E-MAIL" k="email" placeholder="maria@email.com" type="email" />
-                <InputField label="SENHA" k="password" placeholder="••••••••" type="password" />
+                <InputField form={form} update={update} label="NOME COMPLETO" k="name" placeholder="Maria da Silva" />
+                <InputField form={form} update={update} label="E-MAIL" k="email" placeholder="maria@email.com" type="email" />
+                <InputField form={form} update={update} label="SENHA" k="password" placeholder="••••••••" type="password" />
                 <div className="grid grid-cols-2 gap-4">
-                  <InputField label="CPF" k="cpf" placeholder="000.000.000-00" />
-                  <InputField label="TELEFONE" k="phone" placeholder="(11) 99999-9999" />
+                  <InputField form={form} update={update} label="CPF" k="cpf" placeholder="000.000.000-00" />
+                  <InputField form={form} update={update} label="TELEFONE" k="phone" placeholder="(11) 99999-9999" />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
-                  <InputField label="CIDADE" k="city" placeholder="São Paulo" />
+                  <InputField form={form} update={update} label="CIDADE" k="city" placeholder="São Paulo" />
                   <div>
                     <label className="block text-xs font-medium text-muted-foreground mb-1" style={{ fontFamily: "DM Mono, monospace" }}>
                       ESTADO
@@ -1685,35 +1716,7 @@ function PostJobView({
 
   const update = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
-  const Field = ({ label, k, placeholder, type = "text" }: { label: string; k: string; placeholder: string; type?: string }) => (
-    <div>
-      <label className="block text-xs font-medium text-muted-foreground mb-1" style={{ fontFamily: "DM Mono, monospace" }}>
-        {label}
-      </label>
-      <input
-        type={type}
-        value={(form as any)[k]}
-        onChange={(e) => update(k, e.target.value)}
-        placeholder={placeholder}
-        className="w-full border border-border bg-background px-3 h-10 text-sm outline-none focus:border-ring"
-      />
-    </div>
-  );
 
-  const Textarea = ({ label, k, placeholder, rows = 3 }: { label: string; k: string; placeholder: string; rows?: number }) => (
-    <div>
-      <label className="block text-xs font-medium text-muted-foreground mb-1" style={{ fontFamily: "DM Mono, monospace" }}>
-        {label}
-      </label>
-      <textarea
-        value={(form as any)[k]}
-        onChange={(e) => update(k, e.target.value)}
-        placeholder={placeholder}
-        rows={rows}
-        className="w-full border border-border bg-background px-3 py-2 text-sm outline-none focus:border-ring resize-none"
-      />
-    </div>
-  );
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
@@ -1728,11 +1731,11 @@ function PostJobView({
 
       <div className="bg-card border border-border p-6 space-y-5">
         <div className="grid md:grid-cols-2 gap-5">
-          <Field label="TÍTULO DA VAGA" k="title" placeholder="Ex: Auxiliar de Logística" />
-          <Field label="LOCALIDADE" k="location" placeholder="Ex: São Paulo, SP" />
+          <Field form={form} update={update} label="TÍTULO DA VAGA" k="title" placeholder="Ex: Auxiliar de Logística" />
+          <Field form={form} update={update} label="LOCALIDADE" k="location" placeholder="Ex: São Paulo, SP" />
         </div>
         <div className="grid md:grid-cols-3 gap-5">
-          <Field label="SALÁRIO (R$)" k="salary" placeholder="Ex: 2200" type="number" />
+          <Field form={form} update={update} label="SALÁRIO (R$)" k="salary" placeholder="Ex: 2200" type="number" />
           <div>
             <label className="block text-xs font-medium text-muted-foreground mb-1" style={{ fontFamily: "DM Mono, monospace" }}>
               REGIME
@@ -1771,20 +1774,20 @@ function PostJobView({
             </select>
           </div>
         </div>
-        <Field label="PRAZO DE INSCRIÇÃO" k="deadline" placeholder="" type="date" />
-        <Field
+        <Field form={form} update={update} label="PRAZO DE INSCRIÇÃO" k="deadline" placeholder="" type="date" />
+        <Field form={form} update={update}
           label="BENEFÍCIOS (separe por vírgula)"
           k="benefits"
           placeholder="Ex: Vale-transporte, Vale-refeição R$30/dia, Plano de saúde"
         />
-        <Textarea label="DESCRIÇÃO DA VAGA" k="description" placeholder="Descreva as responsabilidades e atividades..." rows={4} />
-        <Textarea
+        <Textarea form={form} update={update} label="DESCRIÇÃO DA VAGA" k="description" placeholder="Descreva as responsabilidades e atividades..." rows={4} />
+        <Textarea form={form} update={update}
           label="REQUISITOS (um por linha)"
           k="requirements"
           placeholder={"Ensino médio completo\nDisponibilidade para turnos\nExperiência com Excel"}
           rows={3}
         />
-        <Textarea
+        <Textarea form={form} update={update}
           label="PROCESSO SELETIVO"
           k="process"
           placeholder="Ex: Triagem de currículos → Entrevista presencial → Exame admissional"
